@@ -1,3 +1,4 @@
+
 import chess
 import chess.pgn
 import chess.polyglot
@@ -166,10 +167,10 @@ def order_moves(board):
 
 nodes = 0
 
-def minimax(board, depth, alpha, beta, maximizing_player, log, start_time, max_time):
+def minimax(board, depth, alpha, beta, maximizing_player, log):
     global nodes
     nodes += 1
-    
+
     bl_hash = b_hash(board)
     tt_entry = t_table.lookup(bl_hash, depth)
     if tt_entry:
@@ -183,7 +184,7 @@ def minimax(board, depth, alpha, beta, maximizing_player, log, start_time, max_t
         if alpha >= beta:
             return tt_eval, tt_move
 
-    if depth == 0 or board.is_game_over() or time.time() - start_time > max_time:
+    if depth == 0 or board.is_game_over():
         return evaluate_board(board, depth), None
 
     best_move = None
@@ -191,67 +192,47 @@ def minimax(board, depth, alpha, beta, maximizing_player, log, start_time, max_t
         max_eval = -float('inf')
         for move in order_moves(board):
             board.push(move)
-            eval, _ = minimax(board, depth - 1, alpha, beta, False, log, start_time, max_time)
+            eval, _ = minimax(board, depth - 1, alpha, beta, False, log)
             board.pop()
             if eval > max_eval:
                 max_eval = eval
                 best_move = move
             alpha = max(alpha, eval)
             if beta <= alpha:
-                break
+                break  # Poda Beta
         log.append((depth, best_move.uci(), max_eval))
-        flag = "exact"
-        if max_eval <= alpha:
-            flag = "upperbound"
-        elif max_eval >= beta:
-            flag = "lowerbound"
-        t_table.store(bl_hash, depth, max_eval, flag, best_move)
+        t_table.store(bl_hash, depth, max_eval, "exact", best_move)
         return max_eval, best_move
     else:
         min_eval = float('inf')
         for move in order_moves(board):
             board.push(move)
-            eval, _ = minimax(board, depth - 1, alpha, beta, True, log, start_time, max_time)
+            eval, _ = minimax(board, depth - 1, alpha, beta, True, log)
             board.pop()
             if eval < min_eval:
                 min_eval = eval
                 best_move = move
             beta = min(beta, eval)
             if beta <= alpha:
-                break
+                break  # Poda Alpha
         log.append((depth, best_move.uci(), min_eval))
-        flag = "exact"
-        if min_eval <= alpha:
-            flag = "upperbound"
-        elif min_eval >= beta:
-            flag = "lowerbound"
-        t_table.store(bl_hash, depth, min_eval, flag, best_move)
+        t_table.store(bl_hash, depth, min_eval, "exact", best_move)
         return min_eval, best_move
 
-def best_minimax(board, max_time):
+def best_minimax(board, max_depth):
     global nodes
     log = []
-    depth = 1
-    starttime = time.time()
     best_move = None
-    best_moves_pd = {}
 
     nodes = 0
-    while True:
-        eval, best_move = minimax(board, depth, -float('inf'), float('inf'), board.turn == chess.WHITE, log, starttime, max_time)
-        if time.time() - starttime > max_time:
-            break
-        best_moves_pd[depth] = best_move
+    for depth in range(1, max_depth + 1):
+        eval, best_move = minimax(board, depth, -float('inf'), float('inf'), board.turn == chess.WHITE, log)
         eval = int(eval * 10)
         print(f"info depth {depth} nodes {nodes} nps {nodes} score cp {eval} pv {best_move.uci()}")
-        depth += 1
-
-    if depth > 1 and (time.time() - starttime > max_time):
-        best_move = best_moves_pd[depth - 1]
 
     print(f"info nodes {nodes}")
     eval = int(eval * 10)
-    print(f"info score cp {eval}", "depth {0}".format(depth - 1))
+    print(f"info score cp {eval} depth {max_depth}")
 
     return best_move
 
@@ -274,17 +255,95 @@ def best_movep(board):
             return entry.move
         except IndexError:
             return None
+        
+# ESTÁ EM BETA TEST
+def difval():
+    num_pieces = sum(1 for square in chess.SQUARES if board.piece_at(square) is not None)
+    legal_moves = len(list(board.legal_moves))
+    threats = 0
+    forced_moves = 0
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if piece and piece.color != board.turn:
+            if board.is_attacked_by(board.turn, square):
+                threats += 1
+            for move in board.legal_moves:
+                if move.to_square == square and board.is_checkmate():
+                    forced_moves += 1
+    phase_factor = 0.8
+    difficulty_score = ((num_pieces / 32) * 5 + (legal_moves / 20) * 3 + (threats / 5) * 7 + (forced_moves / 5) * 5) / 5
+    difficulty_score *= phase_factor
+    difficulty_score = max(0, min(5, difficulty_score))
+    return round(difficulty_score, 5)
 
-def get_timea(rem_time, increment, moveleft=40, position_complexity=1.0):
+def gameconfig():    
+    total_pieces = 0
+    total_value = 0
+    queens = 0
+    rooks = 0
+    knights = 0
+    bishops = 0
+
+    for piece in board.piece_map().values():
+        total_pieces += 1
+        total_value += material.get(piece.piece_type, 0)
+        if piece.piece_type == chess.QUEEN:
+            queens += 1
+        elif piece.piece_type == chess.ROOK:
+            rooks += 1
+        elif piece.piece_type == chess.KNIGHT:
+            knights += 1
+        elif piece.piece_type == chess.BISHOP:
+            bishops += 1
+
+    if total_pieces <= 10 or total_value <= 200:
+        print("info preview endgame")
+        return "endgame"
+    elif queens < 2 and (rooks < 2 or knights + bishops < 2):
+        print("info preview endgame")
+        return "endgame"
+    else:
+        print("info preview midgame")
+        return "midgame"
+
+def calculate_depth(rem_time, increment, moveleft=40, position_complexity=1.0):
+    position_complexity = difval()
+    print(f"info preview dif {position_complexity}")
     moveleft = 80 - moveleft
     buffer_time = rem_time * 0.02
-    
     safetime = rem_time - buffer_time
     if safetime < 0:
         safetime = rem_time
-
     timepmove = (safetime / moveleft + increment) * position_complexity
-    return timepmove * 2
+
+    print(timepmove)
+    
+    x = gameconfig()
+
+    if x == "midgame":    
+        if timepmove <= 50:
+            depth = 4
+        elif (rem_time + increment) <= 0.1:
+            depth = 2
+        elif (rem_time + increment) <= 0.5:
+            depth = 3
+        else:
+            depth = 5
+        if position_complexity > 2.2 and (rem_time + increment) >= 60:
+            depth += 1
+        print(f"info preview depth {depth}")
+        return depth
+    elif x == "endgame":
+        if timepmove <= 30:
+            depth = 4
+        elif (rem_time + increment) <= 0.1:
+            depth = 3
+        else:
+            depth = 5
+        if position_complexity > 2.2 and (rem_time + increment) >= 60:
+            depth += 1
+        print(f"info preview depth {depth}")
+        return depth
 
 board = chess.Board()
 moves = []
@@ -293,6 +352,9 @@ options = {
     "Hash": 128,
     "Ponder": False,
 }
+
+# you can use CPython, but it is recommended to use PyPy
+print("PyPy OK")
 
 while True:
     inp = input().strip()
@@ -377,12 +439,16 @@ while True:
             timer = wtime / 1000 if board.turn == chess.WHITE else btime / 1000
             inc = winc / 1000 if board.turn == chess.WHITE else binc / 1000
 
-            max_time = get_timea(timer, inc)
-            
-            best_move = best_movep(board)
+            depth = calculate_depth(timer, inc)
+
+            for i in range(len(parts)):
+                if parts[i] == "depth":
+                    depth = int(parts[i + 1])
+
+            best_move = best_movep(board)    # with polyglot book
+            #best_move = None                # no polyglot book
             if not best_move:
-                best_move = best_minimax(board, max_time)
-            
+                best_move = best_minimax(board, depth)
             if best_move:
                 try:
                     board.push(best_move)
